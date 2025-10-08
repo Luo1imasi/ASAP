@@ -73,15 +73,15 @@ class Humanoid_Batch:
         
         if "type" in tree.getroot().find("worldbody").findall('.//joint')[0].attrib and tree.getroot().find("worldbody").findall('.//joint')[0].attrib['type'] == "free":
             for j in tree.getroot().find("worldbody").findall('.//joint')[1:]:
-                self.dof_axis.append([int(i) for i in j.attrib['axis'].split(" ")])
+                self.dof_axis.append([float(i) for i in j.attrib['axis'].split(" ")])
             self.has_freejoint = True
         elif not "type" in tree.getroot().find("worldbody").findall('.//joint')[0].attrib:
             for j in tree.getroot().find("worldbody").findall('.//joint'):
-                self.dof_axis.append([int(i) for i in j.attrib['axis'].split(" ")])
+                self.dof_axis.append([float(i) for i in j.attrib['axis'].split(" ")])
             self.has_freejoint = True
         else:
             for j in tree.getroot().find("worldbody").findall('.//joint')[6:]:
-                self.dof_axis.append([int(i) for i in j.attrib['axis'].split(" ")])
+                self.dof_axis.append([float(i) for i in j.attrib['axis'].split(" ")])
             self.has_freejoint = False
         
         self.dof_axis = torch.tensor(self.dof_axis)

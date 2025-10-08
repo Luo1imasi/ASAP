@@ -60,7 +60,9 @@ def process_motion(key_names, key_name_to_pkls, cfg):
     smpl_joint_pick = [i[1] for i in cfg.robot.motion.joint_matches]
     robot_joint_pick_idx = [ robot_joint_names_augment.index(j) for j in robot_joint_pick]
     smpl_joint_pick_idx = [SMPL_BONE_ORDER_NAMES.index(j) for j in smpl_joint_pick]
-    
+    smpl_joint_upper_idx = [3, 6, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    smpl_joint_lower_idx = [0, 1, 2, 4, 5, 7, 8, 10, 11]
+
     smpl_parser_n = SMPL_Parser(model_path="humanoidverse/data/smpl", gender="neutral")
     shape_new, scale = joblib.load(f"humanoidverse/data/shape/{cfg.robot.motion.humanoid_type}/shape_optimized_v1.pkl")
 
@@ -94,7 +96,8 @@ def process_motion(key_names, key_name_to_pkls, cfg):
             with torch.no_grad():
                 verts, joints = smpl_parser_n.get_joints_verts(pose_aa_walk, shape_new, trans)
                 root_pos = joints[:, 0:1]
-                joints = (joints - joints[:, 0:1]) * scale.detach() + root_pos
+                joints[:, smpl_joint_upper_idx] = (joints[:, smpl_joint_upper_idx] - joints[:, 0:1]) * scale[0].detach() + root_pos
+                joints[:, smpl_joint_lower_idx] = (joints[:, smpl_joint_lower_idx] - joints[:, 0:1]) * scale[1].detach() + root_pos
             joints[..., 2] -= verts[0, :, 2].min().item()
             
             offset = joints[:, 0] - trans
@@ -109,14 +112,14 @@ def process_motion(key_names, key_name_to_pkls, cfg):
             dof_pos_new = Variable(dof_pos.clone(), requires_grad=True)
             root_rot_new = Variable(gt_root_rot.clone(), requires_grad=True)
             root_pos_offset = Variable(torch.zeros(1, 3), requires_grad=True)
-            optimizer_pose = torch.optim.Adadelta([dof_pos_new],lr=100)
+            optimizer_pose = torch.optim.Adadelta([dof_pos_new],lr=50)
             optimizer_root = torch.optim.Adam([root_rot_new, root_pos_offset],lr=0.01)
 
             kernel_size = 5  # Size of the Gaussian kernel
             sigma = 0.75  # Standard deviation of the Gaussian kernel
             B, T, J, D = dof_pos_new.shape 
 
-            for iteration in range(cfg.get("fitting_iterations", 1000)):
+            for iteration in range(cfg.get("fitting_iterations", 5000)):
                 pose_aa_h1_new = torch.cat([root_rot_new[None, :, None], humanoid_fk.dof_axis * dof_pos_new, torch.zeros((1, N, num_augment_joint, 3)).to(device)], axis = 2)
                 fk_return = humanoid_fk.fk_batch(pose_aa_h1_new, root_trans_offset[None, ] + root_pos_offset )
                 
@@ -169,7 +172,7 @@ def process_motion(key_names, key_name_to_pkls, cfg):
 
 @hydra.main(version_base=None, config_path="../../humanoidverse/config", config_name="base")
 def main(cfg : DictConfig) -> None:
-    all_pkls = glob.glob("./humanoidverse/data/motions/raw_tairantestbed_smpl/*.npz", recursive=True)
+    all_pkls = glob.glob("./humanoidverse/data/motions/AMASS/CMU/*/*.npz", recursive=True)
     hardcode_motion_name_idx = 3
     key_name_to_pkls = {"0-" + "_".join(data_path.split("/")[hardcode_motion_name_idx:]).replace(".npz", ""): data_path for data_path in all_pkls}
     key_names = ["0-" + "_".join(data_path.split("/")[hardcode_motion_name_idx:]).replace(".npz", "") for data_path in all_pkls]
@@ -182,8 +185,8 @@ def main(cfg : DictConfig) -> None:
         current_data = process_motion(current_key_names, key_name_to_pkls, cfg)
         
         if len(current_data) > 0:  # Only save if processing was successful
-            os.makedirs(f"humanoidverse/data/motions/{cfg.robot.motion.humanoid_type}/TairanTestbed/singles", exist_ok=True)
-            dumped_file = f"humanoidverse/data/motions/{cfg.robot.motion.humanoid_type}/TairanTestbed/singles/{key_name}.pkl"
+            os.makedirs(f"humanoidverse/data/motions/{cfg.robot.motion.humanoid_type}/CMU/singles", exist_ok=True)
+            dumped_file = f"humanoidverse/data/motions/{cfg.robot.motion.humanoid_type}/CMU/singles/{key_name}.pkl"
             logger.info(colored(f"Dumping to {dumped_file}", "green"))
             joblib.dump(current_data, dumped_file)
 

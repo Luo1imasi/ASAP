@@ -13,6 +13,12 @@ from loguru import logger
 from termcolor import colored
 from pathlib import Path
 
+import cv2
+import os
+
+os.environ['__GLX_VENDOR_LIBRARY_NAME'] = 'nvidia'
+os.environ['MUJOCO_GL'] = 'glfw'
+
 def add_visual_capsule(scene, point1, point2, radius, rgba):
     """Adds one capsule to an mjvScene."""
     if scene.ngeom >= scene.maxgeom:
@@ -28,7 +34,7 @@ def add_visual_capsule(scene, point1, point2, radius, rgba):
                         np.array([point2[0], point2[1], point2[2]]))
 
 def key_call_back( keycode):
-    global curr_start, num_motions, motion_id, motion_acc, time_step, dt, paused, motion_data_keys
+    global video_writer, recording, curr_start, num_motions, motion_id, motion_acc, time_step, dt, paused, motion_data_keys
     if chr(keycode) == "R":
         print(colored("Reset", "red"))
         time_step = 0
@@ -44,13 +50,23 @@ def key_call_back( keycode):
             motion_id += 1
             curr_motion_key = motion_data_keys[motion_id]
             print(curr_motion_key)
+    elif chr(keycode) == "V":
+        # 切换录制状态
+        recording = not recording
+        if recording:
+            print(colored("Started Recording", "yellow"))
+        else:
+            print(colored("Stopped Recording", "yellow"))
+            if video_writer is not None:
+                video_writer.release()
+                video_writer = None
     else:
         print(colored(f"Not mapped: {chr(keycode)}", "red"))
 
 
 @hydra.main(version_base=None, config_path="../../humanoidverse/config", config_name="base")
 def main(cfg : DictConfig) -> None:
-    global curr_start, num_motions, motion_id, motion_acc, time_step, dt, paused, motion_data_keys
+    global video_writer, recording, curr_start, num_motions, motion_id, motion_acc, time_step, dt, paused, motion_data_keys
     device = torch.device("cpu")
 
     asset_path = Path(cfg.robot.motion.asset.assetRoot)
@@ -58,6 +74,15 @@ def main(cfg : DictConfig) -> None:
     humanoid_xml = asset_path / asset_file
 
     curr_start, num_motions, motion_id, motion_acc, time_step, dt, paused = 0, 1, 0, set(), 0, 1/30, False
+
+    recording = False
+    video_writer = None
+    # 视频设置
+    video_width = 640
+    video_height = 480
+    fps = int(1/dt)  # 30 FPS
+    output_dir = Path("videos")
+    output_dir.mkdir(exist_ok=True)
 
     if cfg.visualize_motion_file is None:
         logger.error(colored("No motion file provided", "red"))
@@ -71,6 +96,18 @@ def main(cfg : DictConfig) -> None:
     mj_data = mujoco.MjData(mj_model)
 
     mj_model.opt.timestep = dt
+
+    # 创建离屏渲染器用于录制
+    renderer = mujoco.Renderer(mj_model, height=video_height, width=video_width)
+    # 设置录制摄像机参数
+    camera = mujoco.MjvCamera()
+    mujoco.mjv_defaultCamera(camera)
+    # 自定义摄像机视角 - 可根据需要调整
+    camera.azimuth = 45        # 水平旋转角度 (0-360)
+    camera.elevation = -20     # 垂直角度 (-90到90)
+    camera.distance = 3.0      # 距离目标的距离
+    camera.lookat = np.array([0.0, 0.0, 1.0])  # 观察目标点 [x, y, z]
+
     with mujoco.viewer.launch_passive(mj_model, mj_data, key_callback=key_call_back) as viewer:
         for _ in range(24):
             add_visual_capsule(viewer.user_scn, np.zeros(3), np.array([0.001, 0, 0]), 0.05, np.array([1, 0, 0, 1]))
@@ -86,6 +123,25 @@ def main(cfg : DictConfig) -> None:
             mj_data.qpos[7:] = curr_motion['dof'][curr_time]
                 
             mujoco.mj_forward(mj_model, mj_data)
+
+            # 录制视频
+            if recording:
+                if video_writer is None:
+                    # 创建视频文件
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    video_path = output_dir / f"motion_{curr_motion_key}_{timestamp}.mp4"
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    video_writer = cv2.VideoWriter(str(video_path), fourcc, fps, (video_width, video_height))
+                    print(colored(f"Recording to: {video_path}", "yellow"))
+                # 动态调整摄像机目标 - 跟踪机器人
+                camera.lookat = mj_data.qpos[:3]  # 跟踪机器人根部位置
+                # 渲染帧
+                renderer.update_scene(mj_data, camera=camera)
+                frame = renderer.render()
+                # OpenCV使用BGR格式
+                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                video_writer.write(frame_bgr)
+
             if not paused:
                 time_step += dt
 
@@ -100,6 +156,10 @@ def main(cfg : DictConfig) -> None:
             time_until_next_step = mj_model.opt.timestep - (time.time() - step_start)
             if time_until_next_step > 0:
                 time.sleep(time_until_next_step)
+    # 清理资源
+    if video_writer is not None:
+        video_writer.release()
+    renderer.close()
 
 
 if __name__ == "__main__":

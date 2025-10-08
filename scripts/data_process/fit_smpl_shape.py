@@ -33,6 +33,8 @@ def main(cfg : DictConfig) -> None:
     smpl_joint_pick = [i[1] for i in cfg.robot.motion.joint_matches]
     robot_joint_pick_idx = [ robot_joint_names_augment.index(j) for j in robot_joint_pick]
     smpl_joint_pick_idx = [SMPL_BONE_ORDER_NAMES.index(j) for j in smpl_joint_pick]
+    smpl_joint_upper_idx = [3, 6, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    smpl_joint_lower_idx = [0, 1, 2, 4, 5, 7, 8, 10, 11]
 
     #### Preparing fitting varialbes
     device = torch.device("cpu")
@@ -60,17 +62,18 @@ def main(cfg : DictConfig) -> None:
     fk_return = humanoid_fk.fk_batch(pose_aa_robot[None, ], root_trans_offset[None, 0:1])
     
     shape_new = Variable(torch.zeros([1, 10]).to(device), requires_grad=True)
-    scale = Variable(torch.ones([1]).to(device), requires_grad=True)
-    optimizer_shape = torch.optim.Adam([shape_new, scale],lr=0.1)
+    scale = Variable(torch.ones([2]).to(device), requires_grad=True)
+    optimizer_shape = torch.optim.Adam([shape_new, scale], lr=0.02, amsgrad=True)
 
     with Progress() as progress:
         task = progress.add_task(
-            f"Fitting Shape...", total=2000
+            f"Fitting Shape...", total=4000
         )
-        for iteration in range(2000):
+        for iteration in range(4000):
             verts, joints = smpl_parser_n.get_joints_verts(pose_aa_stand, shape_new, trans[0:1])
             root_pos = joints[:, 0]
-            joints = (joints - joints[:, 0]) * scale + root_pos
+            joints[:, smpl_joint_upper_idx] = (joints[:, smpl_joint_upper_idx] - joints[:, 0]) * scale[0] + root_pos
+            joints[:, smpl_joint_lower_idx] = (joints[:, smpl_joint_lower_idx] - joints[:, 0]) * scale[1] + root_pos
             if len(cfg.robot.motion.extend_config) > 0:
                 diff = fk_return.global_translation_extend[:, :, robot_joint_pick_idx] - joints[:, smpl_joint_pick_idx]
             else:
@@ -83,15 +86,15 @@ def main(cfg : DictConfig) -> None:
             loss.backward()
             optimizer_shape.step()
             progress.update(task, advance=1, description=f"Fitting Shape...Iteration {iteration} Loss: {loss.item() * 1000}")
-
+    print(scale)
     if cfg.get("vis", False):
         from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
         import matplotlib.pyplot as plt
         
         j3d = fk_return.global_translation_extend[0, :, :, :].detach().numpy()
-        j3d = j3d - j3d[:, 0:1]
+        j3d = j3d
         j3d_joints = joints.detach().numpy()
-        j3d_joints = j3d_joints - j3d_joints[:, 0:1]
+        j3d_joints = j3d_joints
         idx = 0
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
